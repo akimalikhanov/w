@@ -63,7 +63,7 @@ def generate_domain_features(df):
     # CREDIT related 
     bins=[18, 35, 40, 50, 60, 70, 120]
     labels=['18-29', '30-39', '40-49', '50-59', '60-69', '70+']
-    df['NEW_AGE_GROUP']=pd.cut(df['DAYS_BIRTH']/-365, bins=bins, labels=labels, right=False)
+    df['NEW_AGE_GROUP']=pd.cut(df['DAYS_BIRTH']/-365, bins=bins, labels=labels, right=False).astype('object')
 
     cred_by_contract=df.groupby('NAME_CONTRACT_TYPE')['AMT_CREDIT'].mean() 
     cred_by_housing_type=df.groupby('NAME_HOUSING_TYPE')['AMT_CREDIT'].mean() 
@@ -181,7 +181,7 @@ def numeric_agg(df, group_col, df_name):
 
 
 def categ_agg(df, group_col, df_name, enc, enc_mode='train'):
-    cat_df=df.select_dtypes(include=['category', 'object'])
+    cat_df=df.select_dtypes(include=['object'])
     if cat_df.shape[1]!=0:
         if enc_mode=='train':
             cat_df_ohe=enc.fit_transform(cat_df)
@@ -431,11 +431,14 @@ def zero_var_filter(df, col_path, mode='train'):
 
 def feat_imp_cv(df, feat_imp_path, k=5, params=None, mode='train'):
     if mode=='train':
-        for c in df:
-            if (df[c].dtype=='object') and (df[c].nunique()<df.shape[0]):
-                df[c]=df[c].astype('category')
-        X, y=df.drop(['SK_ID_CURR', 'TARGET'], axis=1), df['TARGET']
+        data=df.copy()
+        for c in data:
+            if (data[c].dtype=='object') and (data[c].nunique()<data.shape[0]):
+                data[c]=data[c].astype('category')
+        X, y=data.drop(['SK_ID_CURR', 'TARGET'], axis=1), data['TARGET']
         feat_importances_gain, feat_importances_split=[], []
+        cols=list(X.columns)
+        cat_feats=list(X.select_dtypes(['category']).columns)
         kfold=StratifiedKFold(k)
         for f, (tr, te) in enumerate(kfold.split(X, y=y)):
             X_train, y_train=X.iloc[tr, :], y.iloc[tr]
@@ -449,16 +452,17 @@ def feat_imp_cv(df, feat_imp_path, k=5, params=None, mode='train'):
                             train_set=dtrain,
                             valid_sets=[dtrain, dval],
                             valid_names=['train', 'test'],
-                            categorical_feature=list(X.select_dtypes(['category']).columns),
+                            categorical_feature=cat_feats,
                             callbacks=[lgb.early_stopping(100, verbose=-1)],
                             verbose_eval=False
                             )
             feat_importances_gain.append(model.feature_importance(importance_type='gain'))
             feat_importances_split.append(model.feature_importance(importance_type='split'))
-            
+        
+        gc.enable(); del data, X, y; gc.collect()
         feat_importances_gain=np.array(feat_importances_gain).mean(axis=0)
         feat_importances_split=np.array(feat_importances_split).mean(axis=0)
-        feat_importances_df=pd.DataFrame({'feature': list(X.columns),
+        feat_importances_df=pd.DataFrame({'feature': cols,
                                         'importance (gain)': feat_importances_gain,
                                         'importance (split)': feat_importances_split,})
         with open(feat_imp_path, 'wb') as f:
@@ -493,7 +497,7 @@ def save_data(df, df_path, dtypes_path=None):
 
 def train_model(df, params, model_path, col_tran_path):
     X, y=df.drop(['SK_ID_CURR', 'TARGET'], axis=1), df['TARGET']
-    cat_cols, num_cols=X.select_dtypes(include=['category', 'object']).columns, X.select_dtypes('number').columns
+    cat_cols, num_cols=X.select_dtypes(include=['object']).columns, X.select_dtypes('number').columns
     ohe=OneHotEncoder(sparse=False, handle_unknown='ignore')
     col_tran=ColumnTransformer([
         ('cat', ohe, cat_cols),
